@@ -1,104 +1,138 @@
 import numpy as np
 import re
-import collections
+from collections import Counter
 import io
 
-def read_data(_file, cleaning):
-    revs = []
-    max_len = 0
-    words_list = []
-    with io.open(_file, "r",  encoding="ISO-8859-1") as f:
-        next(f)
-        for line in f:  
-            ID, label, sentence = line.split('\t')        
-            label_idx = 1 if label=='pos' else 0 # 1 for pos and 0 for neg
-            rev = []
-            rev.append(sentence.strip())
-            
-            if cleaning:
-                orig_rev = clean_str(" ".join(rev)) 
-            else:
-                orig_rev = " ".join(rev).lower()
-            
-            revs.append({'y':label_idx, 'txt':orig_rev})
-            words_list += orig_rev.split()
-    return revs, words_list
+EPSILON = 1e-8
 
-def clean_str(string):
-    """
-    TODO: Data cleaning
-    """  
-    return string
+# TODO: check special characters
 
-def build_vocab(words_list, max_vocab_size=-1):
-    """
-    TODO: 
-        Build a word dictionary, use max_vocab_size to limit the total number of vocabulary.
-        if max_vocab_size==-1, then use all possible words as vocabulary. The dictionary should look like:
-        ex:
-            word2idx = { 'UNK': 0, 'i': 1, 'love': 2, 'nlp': 3, ... }
-        
-        top_10_words is a list of the top 10 frequently words appeared
-        ex:
-            top_10_words = ['a','b','c','d','e','f','g','h','i','j']
-    """  
-    word2idx = {'UNK': 0} # UNK is for unknown word
-    top_10_words = []
-    return word2idx, top_10_words
+class DataManager:
+  '''
+  Manage data and convert it to bow vectors for the network
+  '''
+  def __init__(self, file_name, do_cleaning=False, max_vocab_size=None, drop_vocab_max_ratio=0.1):
+    # Settings
+    self.max_vocab_size = max_vocab_size
+      # Determine the ratio of most freq to least freq words
+    self.drop_vocab_max_ratio = drop_vocab_max_ratio
 
-def get_info(revs, words_list):
-    """
-    TODO: 
-        First check what is revs. Then calculate max len among the sentences and the number of the total words
-        in the data.
-        nb_sent, max_len, word_count are scalars
-    """  
-    nb_sent, max_len, word_count = 0, 0, 0
-    return nb_sent, max_len, word_count
+    # Stats
+    self.max_len = 0        # Max document length
+    self.doc_count = 0      # Number of documents
+    self.word_count = 0
+    self.input_vec_len = 0
 
-def data_preprocess(_file, cleaning, max_vocab_size):
-    revs, words_list = read_data(_file, cleaning)
-    nb_sent, max_len, word_count = get_info(revs, words_list)
-    word2idx, top_10_words = build_vocab(words_list, max_vocab_size) 
-    # data analysis
-    print("Number of words: ", word_count)
-    print("Max sentence length: ", max_len)
-    print("Number of sentences: ", nb_sent)
-    print("Number of vocabulary: ", len(word2idx))
+    # Read data from file
+    self.docs = []
+    self.words_list = []
+    with io.open(file_name, "r", encoding="ISO-8859-1") as f:
+      next(f)
+      for line in f:
+        ID, label, sentence = line.split('\t', 2)
+        label_idx = int(label == 'pos') # 1 for pos and 0 for neg
+        sentence = sentence.strip()
+
+        if do_cleaning:
+          orig_tweet = self._clean_str(sentence)
+        else:
+          orig_tweet = sentence.lower()
+
+        self.docs.append({'y':label_idx, 'txt':orig_tweet})
+        self.words_list += orig_tweet.split()
+        cur_sentence_len = len(orig_tweet.split())
+        self.max_len = max(self.max_len, cur_sentence_len)
+        self.word_count += cur_sentence_len
+        self.doc_count += 1
+
+    # Get word index dictionary
+    self.word2idx = {}
+    top_10_words = self._build_vocab()
+    self.input_vec_len = len(self.word2idx.keys())
+
+    # Print stats
+    print("Number of words: ", self.word_count)
+    print("Max sentence length: ", self.max_len)
+    print("Number of sentences: ", self.doc_count)
+    print("Number of vocabulary: ", len(self.word2idx))
     print("Top 10 most frequently words", top_10_words)
 
-    return revs, word2idx
+  def get_info(self):
+    '''
+    Return stats from target data
+    '''
+    return self.doc_count, self.max_len, self.word_count
 
-def feature_extraction_bow(revs, word2idx):
-    """
-    TODO: 
-        Convert sentences into vectors using BoW. 
-        data is a 2-D array with the size (nb_sentence*nb_vocab)
-        label is a 2-D array with the size (nb_sentence*1)
-    """  
-    data = []
-    label = []
-    for sent_info in revs:
-        label.append([sent_info['y']])
-    return np.array(data), np.array(label)
+  def extract_feature(self, do_normailzation=False):
+    '''
+    Return bow vectors and corresponding label
+    '''
+    ret_data = np.zeros([self.doc_count, self.input_vec_len])
+    ret_label = []
+    for doc_index, doc in enumerate(self.docs):
+      counter = Counter(doc['txt'].split())
+      for word, count in dict(counter).items():
+        ret_data[doc_index, self.word2idx[word]] = float(count)
+      ret_label.append(doc['y'])
+    if do_normailzation:
+      mean = np.mean(ret_data, 1)
+      std = np.std(ret_data, 1) + EPSILON
+      ret_data = (ret_data - mean[:, None]) / std[:, None]
+    return ret_data, np.array(ret_label)
 
-def normalization(data):
-    """
-    TODO: 
-        Normalize each dimension of the data into mean=0 and std=1
-    """ 
-    return data
+  def _build_vocab(self):
+    '''
+    Build word index dictionary
+    '''
+    counter = Counter(self.words_list)
+    words_len = len(counter.items())
+    if self.max_vocab_size is not None:
+      self.max_vocab_size = int(self.max_vocab_size)
+      if self.max_vocab_size < words_len and self.max_vocab_size > 0:
+        sorted_words = sorted(counter.items(), key=lambda x: x[1], reverse=True)
+        drop_count = words_len - self.max_vocab_size
+        drop_most_freq_word_count = drop_count * self.drop_vocab_max_ratio
+        sorted_words = sorted_words[drop_most_freq_word_count:
+                                    -(drop_count - drop_most_freq_word_count)]
+        counter = Counter(dict(sorted_words))
+    self.word2idx = {str(key): index+1 for index, key in enumerate(dict(counter).keys())}
+    self.word2idx['UNK'] = 0 # UNK is for unknown word
+    top_10_words = [str(x) for x in dict(counter.most_common(10)).keys()]
+    return top_10_words
+
+  def _clean_str(self, string):
+    '''
+    Remove noise from input string
+    '''
+    ret_str = string
+    # Remove HTML entity
+    ret_str = re.sub(r'&[a-zA-Z];', '', ret_str)
+    # Remove URL
+    ret_str = re.sub(r' ?URL ?', ' ', ret_str)
+    # Remove punctuation
+    ret_str = re.sub(r'[^a-zA-Z0-9\' ]', ' ', ret_str)
+    # Remove more than one space
+    ret_str = re.sub(r'\ +', ' ', ret_str)
+    return ret_str.strip()
 
 if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser(description='Building Interactive Intelligent Systems')
-    parser.add_argument('-f','--file', help='input csv file', required=False, default='./twitter-sentiment.csv')
-    parser.add_argument('-c','--clean', help='True to do data cleaning, default is False', action='store_true')
-    parser.add_argument('-mv','--max_vocab', help='max vocab size predifined, no limit if set -1', required=False, default=-1)
-    args = vars(parser.parse_args())
-    print(args)
+  import argparse
+  parser = argparse.ArgumentParser(description='Building Interactive Intelligent Systems')
+  parser.add_argument('-f', '--file', help='input csv file', required=False,
+                      default='./twitter-sentiment.csv')
+  parser.add_argument('-c', '--clean', help='True to do data cleaning, default is False',
+                      action='store_true')
+  parser.add_argument('-mv', '--max_vocab', help='max vocab size predifined, no limit if set -1',
+                      required=False, default=None)
+  args = vars(parser.parse_args())
 
-    revs, word2idx = data_preprocess(args['file'], args['clean'], int(args['max_vocab']))
+  manager = DataManager(args['file'], args['clean'], args['max_vocab'])
+  data, label = manager.extract_feature(True)
+  print('Data shape: ', np.shape(data), ', Label shape: ', np.shape(label))
+  # print(manager._clean_str('@ lol//ahh..there is really no come back (pardon pun) to that '))
 
-    data, label = feature_extraction_bow(revs, word2idx)
-    data = normalization(data)
+  ## With old implementation:
+  # revs, word2idx = data_preprocess(args['file'], args['clean'], int(args['max_vocab']))
+
+  # data, label = feature_extraction_bow(revs, word2idx)
+  # data = normalization(data)
