@@ -1,17 +1,21 @@
-import numpy as np
+'''
+preprocess.py
+
+Data preprocessing
+'''
+import io
 import re
 from collections import Counter
-import io
+import numpy as np
 
 EPSILON = 1e-8
-
-# TODO: check special characters
 
 class DataManager:
   '''
   Manage data and convert it to bow vectors for the network
   '''
   def __init__(self, file_name, do_cleaning=False, max_vocab_size=None, drop_vocab_max_ratio=0.1):
+    print('\rInitializing DataManager...', end='\033[K')
     # Settings
     self.max_vocab_size = max_vocab_size
       # Determine the ratio of most freq to least freq words
@@ -28,7 +32,7 @@ class DataManager:
     self.words_list = []
     with io.open(file_name, "r", encoding="ISO-8859-1") as f:
       next(f)
-      for line in f:
+      for line_no, line in enumerate(f):
         ID, label, sentence = line.split('\t', 2)
         label_idx = int(label == 'pos') # 1 for pos and 0 for neg
         sentence = sentence.strip()
@@ -44,11 +48,16 @@ class DataManager:
         self.max_len = max(self.max_len, cur_sentence_len)
         self.word_count += cur_sentence_len
         self.doc_count += 1
+        print('\r%d lines read'%(line_no + 1), end='\033[K')
+    
+    print('\nStart building dictionary...', end='')
 
     # Get word index dictionary
     self.word2idx = {}
     top_10_words = self._build_vocab()
     self.input_vec_len = len(self.word2idx.keys())
+
+    print('\rFinish building dictionary...\n')
 
     # Print stats
     print("Number of words: ", self.word_count)
@@ -57,11 +66,35 @@ class DataManager:
     print("Number of vocabulary: ", len(self.word2idx))
     print("Top 10 most frequently words", top_10_words)
 
-  def get_info(self):
+    print('\nDataManager initialized!')
+
+  @property
+  def doc_count(self):
     '''
-    Return stats from target data
+    Return number of sentences
     '''
-    return self.doc_count, self.max_len, self.word_count
+    return self.doc_count
+
+  @property
+  def max_len(self):
+    '''
+    Return max sentence length
+    '''
+    return self.max_len
+
+  @property
+  def word_count(self):
+    '''
+    Return number of words
+    '''
+    return self.word_count
+
+  @property
+  def vec_len(self):
+    '''
+    Return number of vocabulary
+    '''
+    return self.vec_len
 
   def extract_feature(self, do_normailzation=False):
     '''
@@ -96,7 +129,7 @@ class DataManager:
                                     -(drop_count - drop_most_freq_word_count)]
         counter = Counter(dict(sorted_words))
     self.word2idx = {str(key): index+1 for index, key in enumerate(dict(counter).keys())}
-    self.word2idx['UNK'] = 0 # UNK is for unknown word
+    self.word2idx['<UNK>'] = 0 # Unknown word
     top_10_words = [str(x) for x in dict(counter.most_common(10)).keys()]
     return top_10_words
 
