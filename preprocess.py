@@ -66,35 +66,7 @@ class DataManager:
     print("Number of vocabulary: ", len(self.word2idx))
     print("Top 10 most frequently words", top_10_words)
 
-    print('\nDataManager initialized!')
-
-  @property
-  def doc_count(self):
-    '''
-    Return number of sentences
-    '''
-    return self.doc_count
-
-  @property
-  def max_len(self):
-    '''
-    Return max sentence length
-    '''
-    return self.max_len
-
-  @property
-  def word_count(self):
-    '''
-    Return number of words
-    '''
-    return self.word_count
-
-  @property
-  def vec_len(self):
-    '''
-    Return number of vocabulary
-    '''
-    return self.vec_len
+    print('\nDataManager initialized!\n')
 
   def extract_feature(self, do_normailzation=False):
     '''
@@ -106,7 +78,7 @@ class DataManager:
       counter = Counter(doc['txt'].split())
       for word, count in dict(counter).items():
         ret_data[doc_index, self.word2idx[word]] = float(count)
-      ret_label.append(doc['y'])
+      ret_label.append([doc['y']])
     if do_normailzation:
       mean = np.mean(ret_data, 1)
       std = np.std(ret_data, 1) + EPSILON
