@@ -228,11 +228,10 @@ class Model:
         # Calculate validation loss and accuracy
         sum_valid_loss = 0.
         valid_correct_count = 0.
-        rand_ints = np.random.permutation(len(x_valid))
         total_valid_size = len(rand_ints) // batch_size * batch_size
-        for iter_index in range(len(rand_ints) // batch_size):
-          data_batch = x_valid[rand_ints[iter_index*batch_size:(iter_index+1)*batch_size]]
-          label_batch = y_valid[rand_ints[iter_index*batch_size:(iter_index+1)*batch_size]]
+        for iter_index in range(len(x_valid) // batch_size):
+          data_batch = x_valid[iter_index*batch_size:(iter_index+1)*batch_size]
+          label_batch = y_valid[iter_index*batch_size:(iter_index+1)*batch_size]
           self.input_layer(data_batch)
           sum_valid_loss += self.loss_fn(label_batch, self.output_layer.output)
           valid_correct_count += self.accuracy_fn(label_batch,
@@ -242,6 +241,7 @@ class Model:
         print(' val_loss: %.4f val_acc: %.3f'%(mean_valid_loss, mean_valid_acc))
         log.write('%d,%.5f,%.5f\n'%(epoch_index, train_correct_count / total_train_size,
                                     mean_valid_acc))
+        # Save best model
         if mean_valid_loss < best_valid_loss and model_file is not None:
           best_valid_loss = mean_valid_loss
           self.save(model_file, best_valid_loss)
