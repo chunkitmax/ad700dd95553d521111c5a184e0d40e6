@@ -14,9 +14,10 @@ class DataManager:
   '''
   Manage data and convert it to bow vectors for the network
   '''
-  def __init__(self, file_name, do_cleaning=False, max_vocab_size=None, drop_vocab_max_ratio=0.1):
+  def __init__(self, file_name, do_cleaning=True, max_vocab_size=None, drop_vocab_max_ratio=0.1):
     print('\rInitializing DataManager...', end='\033[K')
     # Settings
+    self.do_cleaning = do_cleaning
     self.max_vocab_size = max_vocab_size
       # Determine the ratio of most freq to least freq words
     self.drop_vocab_max_ratio = drop_vocab_max_ratio
@@ -29,27 +30,11 @@ class DataManager:
 
     # Read data from file
     self.docs = []
-    self.words_list = []
-    with io.open(file_name, "r", encoding="ISO-8859-1") as f:
-      next(f)
-      for line_no, line in enumerate(f):
-        ID, label, sentence = line.split('\t', 2)
-        label_idx = int(label == 'pos') # 1 for pos and 0 for neg
-        sentence = sentence.strip()
+    self.word_list = []
 
-        if do_cleaning:
-          orig_tweet = self._clean_str(sentence)
-        else:
-          orig_tweet = sentence.lower()
+    self.docs, self.word_list, self.max_len, \
+    self.word_count, self.doc_count = self._read_data(file_name)
 
-        self.docs.append({'y':label_idx, 'txt':orig_tweet})
-        self.words_list += orig_tweet.split()
-        cur_sentence_len = len(orig_tweet.split())
-        self.max_len = max(self.max_len, cur_sentence_len)
-        self.word_count += cur_sentence_len
-        self.doc_count += 1
-        print('\r%d lines read'%(line_no + 1), end='\033[K')
-    
     print('\nStart building dictionary...', end='')
 
     # Get word index dictionary
@@ -67,21 +52,57 @@ class DataManager:
     print("Top 10 most frequently words", top_10_words)
 
     print('\nDataManager initialized!\n')
+  
+  def _read_data(self, file_name):
+    docs = []
+    word_list = []
 
-  def extract_feature(self, do_normailzation=False):
+    max_len = 0
+    word_count = 0
+    doc_count = 0
+
+    with io.open(file_name, "r", encoding="ISO-8859-1") as f:
+      next(f)
+      for line_no, line in enumerate(f):
+        ID, label, sentence = line.split('\t', 2)
+        label_idx = int(label == 'pos') # 1 for pos and 0 for neg
+        sentence = sentence.strip()
+
+        if self.do_cleaning:
+          orig_tweet = self._clean_str(sentence)
+        else:
+          orig_tweet = sentence.lower()
+
+        docs.append({'y':label_idx, 'txt':orig_tweet})
+        word_list += orig_tweet.split()
+        cur_sentence_len = len(orig_tweet.split())
+        max_len = max(max_len, cur_sentence_len)
+        word_count += cur_sentence_len
+        doc_count += 1
+        print('\r%d lines read'%(line_no + 1), end='\033[K')
+    return docs, word_list, max_len, word_count, doc_count
+
+  def extract_feature(self, do_normailzation=False, target_file_name=None):
     '''
     Return bow vectors and corresponding label
     '''
-    ret_data = np.zeros([self.doc_count, self.input_vec_len])
+    if target_file_name is None:
+      docs, doc_count = self.docs, self.doc_count
+    else:
+      docs, _, _, _, doc_count = self._read_data(target_file_name)
+    ret_data = np.zeros([doc_count, self.input_vec_len])
     ret_label = []
-    for doc_index, doc in enumerate(self.docs):
+    for doc_index, doc in enumerate(docs):
       counter = Counter(doc['txt'].split())
       for word, count in dict(counter).items():
-        ret_data[doc_index, self.word2idx[word]] = float(count)
+        if word not in self.word2idx.keys():
+          word = '<UNK>'
+        ret_data[doc_index, self.word2idx[word]] += float(count)
       ret_label.append([doc['y']])
     if do_normailzation:
       mean = np.mean(ret_data, 1)
-      std = np.std(ret_data, 1) + EPSILON
+      std = np.std(ret_data, 1)
+      std[std == 0.] = EPSILON
       ret_data = (ret_data - mean[:, None]) / std[:, None]
     return ret_data, np.array(ret_label)
 
@@ -89,16 +110,16 @@ class DataManager:
     '''
     Build word index dictionary
     '''
-    counter = Counter(self.words_list)
+    counter = Counter(self.word_list)
     words_len = len(counter.items())
     if self.max_vocab_size is not None:
       self.max_vocab_size = int(self.max_vocab_size)
       if self.max_vocab_size < words_len and self.max_vocab_size > 0:
         sorted_words = sorted(counter.items(), key=lambda x: x[1], reverse=True)
         drop_count = words_len - self.max_vocab_size
-        drop_most_freq_word_count = drop_count * self.drop_vocab_max_ratio
+        drop_most_freq_word_count = int(drop_count * self.drop_vocab_max_ratio)
         sorted_words = sorted_words[drop_most_freq_word_count:
-                                    -(drop_count - drop_most_freq_word_count)]
+                                    -(drop_count - drop_most_freq_word_count + 1)]
         counter = Counter(dict(sorted_words))
     self.word2idx = {str(key): index+1 for index, key in enumerate(dict(counter).keys())}
     self.word2idx['<UNK>'] = 0 # Unknown word
