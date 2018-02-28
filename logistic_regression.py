@@ -389,8 +389,8 @@ if __name__ == '__main__':
   parser = argparse.ArgumentParser(description='Building Interactive Intelligent Systems')
   parser.add_argument('-c', '--clean', help='True to do data cleaning, default is False',
                       action='store_true')
-  parser.add_argument('-mv', '--max_vocab', help='max vocab size predifined, no limit if set -1',
-                      required=False, default=-1)
+  parser.add_argument('-mv', '--max_vocab', help='max vocab size predifined, no limit if set None',
+                      required=False, default=None)
   parser.add_argument('-lr', '--learning_rate', required=False, default=0.001)
   parser.add_argument('-m', '--momentum', required=False, default=0.9)
   parser.add_argument('-i', '--num_iter', required=False, default=10)
