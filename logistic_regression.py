@@ -1,5 +1,11 @@
+'''
+logistic_regression.py
+
+Model training
+'''
 import re
 import time
+import os.path as Path
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
@@ -7,6 +13,50 @@ from sklearn.model_selection import train_test_split
 from preprocess import DataManager
 
 EPSILON = 1e-8
+
+def add_epsilon(v):
+  v[v == 0.] = EPSILON
+  return v
+
+class Activation:
+  @staticmethod
+  def sigmoid():
+    def _sigmoid(x):
+      return 1 / (1 + np.exp(-x))
+    def _d_sigmoid(y):
+      return y * (1 - y)
+    return _sigmoid, _d_sigmoid
+  @staticmethod
+  def leaky_relu():
+    def _leaky_relu(x):
+      return np.max([x, 0.1*x], 0)
+    def _d_leaky_relu(y):
+      _y = np.zeros_like(y, dtype=np.float64)
+      _y[y >= 0.] = 1.
+      return _y
+    return _leaky_relu, _d_leaky_relu
+
+class Loss:
+  @staticmethod
+  def cross_entropy():
+    def loss(target, output):
+      batch_loss = -np.sum(target * np.log(add_epsilon(output)) \
+                           + (1.-target) * np.log(add_epsilon(1.-output)),
+                           axis=1, keepdims=True)
+      return np.mean(batch_loss, axis=0)
+    def gradient(target, output):
+      dE_dOut = -target / (add_epsilon(output)) + (1.-target) / add_epsilon(1.-output)
+      return dE_dOut
+    def accuracy(target, output):
+      _output = output.copy()
+      shape = np.shape(output)
+      _output[_output < .5] = 0.
+      _output[_output >= .5] = 1.
+      correct = np.sum(np.equal(target, _output).astype(np.float64), axis=1)
+      correct[correct != shape[1]] = 0.
+      correct[correct == shape[1]] = 1.
+      return np.mean(correct)
+    return loss, gradient, accuracy
 
 class Input:
   """
@@ -42,7 +92,7 @@ class Dense:
     """
     Args:
       output_unit:        Number of neuron
-      activation_fn_name: Activation function name
+      activation_fn_name:      Activation function name
       bias_random_init:   Indicate whether bias should be initialized
                             uniformly distributed [0., .1)
       weight_random_init: Indicate whether weight should be initialized
@@ -52,15 +102,7 @@ class Dense:
     self.weight_random_init = weight_random_init
     assert isinstance(activation_fn_name, str)
     self.activation_fn_name = activation_fn_name
-    self.activation_fn = {
-        'sigmoid': lambda x: 1 / (1 + np.exp(-x)),
-        'leaky_relu': lambda x: np.max([x, 0.1*x], 0)
-        # 'softmax': lambda x:
-    }[activation_fn_name]
-    self.d_activation_fn = {
-        'sigmoid': lambda y: y * (1 - y),
-        'leaky_relu': lambda y: 1 if y > 0. else .1
-    }[activation_fn_name]
+    self.activation_fn, self.d_activation_fn = getattr(Activation, self.activation_fn_name)()
     self.output_unit = output_unit
     self.prev_layer = None
     self.next_layer = None
@@ -114,36 +156,38 @@ class Dense:
     # Propagation error to previous layer
     self.prev_layer._back_prop(dError_dOut_prev, learning_rate, momentum)
   def _save(self, h5_file, index):
-    if '%d_dense_w'%(index) in h5_file.keys():
-      h5_file['%d_dense_w'%(index)] = self.weight
-      h5_file['%d_dense_b'%(index)] = self.bias
-      h5_file['%d_dense_v'%(index)] = self.velocity
-      h5_file['%d_dense_a'%(index)] = self.activation_fn_name
-      h5_file['%d_dense_o'%(index)] = self.output_unit
+    if '%d_Dense_w'%(index) in h5_file.keys():
+      h5_file['%d_Dense_w'%(index)] = self.weight
+      h5_file['%d_Dense_b'%(index)] = self.bias
+      h5_file['%d_Dense_v'%(index)] = self.velocity
+      h5_file['%d_Dense_a'%(index)] = self.activation_fn_name
+      h5_file['%d_Dense_o'%(index)] = self.output_unit
     else:
       assert any([not x.startswith('%d_'%(index)) or x.startswith('%d_dense'%(index)) for x in h5_file.keys()])
-      h5_file.create_dataset('%d_dense_w'%(index), data=self.weight)
-      h5_file.create_dataset('%d_dense_b'%(index), data=self.bias)
-      h5_file.create_dataset('%d_dense_v'%(index), data=self.velocity)
-      h5_file.create_dataset('%d_dense_a'%(index), data=self.activation_fn_name)
-      h5_file.create_dataset('%d_dense_o'%(index), data=self.output_unit)
+      h5_file.create_dataset('%d_Dense_w'%(index), data=self.weight)
+      h5_file.create_dataset('%d_Dense_b'%(index), data=self.bias)
+      h5_file.create_dataset('%d_Dense_v'%(index), data=self.velocity)
+      h5_file.create_dataset('%d_Dense_a'%(index), data=self.activation_fn_name)
+      h5_file.create_dataset('%d_Dense_o'%(index), data=self.output_unit)
     if self.next_layer is not None:
       self.next_layer._save(h5_file, index+1)
   @staticmethod
-  def _load(h5_file, index):
-    # TODO: test this function
-    related_key_list = [x for x in h5_file.keys() if x.startsWith(index+'_')]
-    var_list = {re.search(r'dense_(.+)$', key)[1]: h5_file[key] for key in related_key_list}
+  def _load(h5_file, index, prev_layer):
+    related_key_list = [x for x in h5_file.keys() if x.startswith(str(index)+'_')]
+    var_list = {re.search(r'Dense_(.+)$', key)[1]: h5_file[key][()] for key in related_key_list}
     self_obj = Dense(var_list['o'], var_list['a'])
     self_obj.weight = var_list['w']
     self_obj.bias = var_list['b']
     self_obj.velocity = var_list['v']
+    self_obj.prev_layer = prev_layer
+    prev_layer.next_layer = self_obj
     return self_obj
 class Model:
   """
   Manage model
   """
-  def __init__(self, learning_rate, momentum=0.):
+  def __init__(self, learning_rate, momentum=0., data_file='./twitter-sentiment.csv',
+               model_file=None, load_model=False):
     """
     Args:
       learning_rate:      For update weight and bias
@@ -151,23 +195,44 @@ class Model:
     """
     self.learning_rate = learning_rate
     self.momentum = momentum
-    # TODO: path should be passed from outside?
-    self.data_manager = DataManager('./twitter-sentiment.csv', do_cleaning=True)
+    self.model_file = model_file
+    if not self.model_file.endswith('.h5'):
+      self.model_file += '.h5'
+    self.data_manager = DataManager(data_file, do_cleaning=True)
     self.input_layer = None
     self.output_layer = None
     self.loss_fn = None
     self.gradient_fn = None
-    self._build_model()
+    if load_model and Path.exists(self.model_file):
+      self._load_model()
+    else:
+      self._build_model()
   def _build_model(self):
     # Get functions for evaluating loss, gradient and accuarcy
-    self.loss_fn, self.gradient_fn, self.accuracy_fn = self.cross_entropy()
+    self.loss_fn, self.gradient_fn, self.accuracy_fn = Loss.cross_entropy()
     # Input layer
     self.input_layer = Input(self.data_manager.input_vec_len)
     # Output layer:
     #   activation func:                      sigmoid
     #   Bias, weight random initialization:   True
     self.output_layer = Dense(1, 'sigmoid', True, True)(self.input_layer)
-  def fit(self, batch_size=1, epoch=1, log_file='run.log', split_ratio=.2, model_file=None):
+  def _load_model(self):
+    self.loss_fn, self.gradient_fn, self.accuracy_fn = Loss.cross_entropy()
+    import h5py
+    with h5py.File(self.model_file, 'r') as h5f:
+      var_name_list = sorted(h5f.keys())
+      last_index = -1
+      last_layer = None
+      last_layer = self.input_layer = Input(h5f['input'][()])
+      for var_name in var_name_list:
+        if var_name.startswith(str(last_index+1)+'_'):
+          search_result = re.search(r'[0-9]+_([^_]+)_.+', var_name)
+          last_index += 1
+          class_name = search_result[1]
+          new_layer = globals()[class_name]._load(h5f, last_index, last_layer)
+          last_layer = new_layer
+      self.output_layer = last_layer
+  def fit(self, batch_size=1, epoch=1, log_file='run.log', split_ratio=.2):
     """
     Train the network for a fixed number of epochs
 
@@ -228,7 +293,7 @@ class Model:
         # Calculate validation loss and accuracy
         sum_valid_loss = 0.
         valid_correct_count = 0.
-        total_valid_size = len(rand_ints) // batch_size * batch_size
+        total_valid_size = len(x_valid) // batch_size * batch_size
         for iter_index in range(len(x_valid) // batch_size):
           data_batch = x_valid[iter_index*batch_size:(iter_index+1)*batch_size]
           label_batch = y_valid[iter_index*batch_size:(iter_index+1)*batch_size]
@@ -238,17 +303,16 @@ class Model:
                                                   self.output_layer.output) * len(label_batch)
         mean_valid_loss = sum_valid_loss / total_valid_size
         mean_valid_acc = valid_correct_count / total_valid_size
-        print(' val_loss: %.4f val_acc: %.3f'%(mean_valid_loss, mean_valid_acc))
+        print(' val_loss: %.4f val_acc: %.3f'%(mean_valid_loss, mean_valid_acc), end='')
         log.write('%d,%.5f,%.5f\n'%(epoch_index, train_correct_count / total_train_size,
                                     mean_valid_acc))
         # Save best model
-        if mean_valid_loss < best_valid_loss and model_file is not None:
+        if mean_valid_loss < best_valid_loss and self.model_file is not None:
           best_valid_loss = mean_valid_loss
-          self.save(model_file, best_valid_loss)
-          print(' -- saved', end='')
-          best_train_acc = mean_valid_acc
+          self.save(self.model_file, best_valid_loss)
+          best_valid_acc = mean_valid_acc
         print('\n')
-    print('\nBest validation accuracy: %d\n'%(best_train_acc))
+    print('\nBest validation accuracy: %d\n'%(best_valid_acc))
     print('Finish training!\n')
   def save(self, file_name, valid_loss):
     if not file_name.endswith('.h5'):
@@ -258,48 +322,12 @@ class Model:
       if 'best_valid_loss' not in h5f.keys() or h5f['best_valid_loss'] > valid_loss:
         self.input_layer._save(h5f)
         h5f['best_valid_loss'] = valid_loss
-  def load(self, file_name):
-    if not file_name.endswith('.h5'):
-      file_name += '.h5'
-    import h5py
-    with h5py.File(file_name, 'r') as h5f:
-      var_name_list = sorted(h5f.keys())
-      last_index = -1
-      last_layer = None
-      last_layer = self.input_layer = Input(h5f['input'])
-      for var_name in var_name_list:
-        if not var_name.startswith(last_index+'_'):
-          search_result = re.search(r'([0-9]+)_([^_]+)_.+', var_name)
-          last_index = int(search_result[1])
-          class_name = search_result[2]
-          new_layer = globals[class_name]._load(h5f, last_index)
-          new_layer(last_layer)
-          last_layer = new_layer
-      self.output_layer = last_layer
-  @staticmethod
-  def cross_entropy():
-    def loss(target, output):
-      batch_loss = -np.sum(target * np.log(output+EPSILON) \
-                           + (1.-target) * np.log(1.-output+EPSILON),
-                           axis=1, keepdims=True)
-      return np.mean(batch_loss, axis=0)
-    def gradient(target, output):
-      dE_dOut = -target / (output+EPSILON) + (1.-target) / (1.-output+EPSILON)
-      return dE_dOut
-    def accuracy(target, output):
-      _output = output.copy()
-      shape = np.shape(output)
-      _output[_output < .5] = 0.
-      _output[_output >= .5] = 1.
-      correct = np.sum(np.equal(target, _output).astype(np.float64), axis=1)
-      correct[correct != shape[1]] = 0.
-      correct[correct == shape[1]] = 1.
-      return np.mean(correct)
-    return loss, gradient, accuracy
+        print(' -- saved', end='')
 
 if __name__ == '__main__':
-  model = Model(.001, .9)
-  model.fit(batch_size=50, epoch=10, model_file='model')
+  model = Model(.001, .9, model_file='model', load_model=False)
+  model.fit(batch_size=50, epoch=1)
+  # TOOD: Output prediction to file "myPrediction.csv"
 
 # def write_testset_prediction(parameters, test_data, file_name="myPrediction.csv"):
 #   Y_prediction_test = predict(parameters['w'], parameters['b'], test_data)
@@ -356,3 +384,4 @@ if __name__ == '__main__':
 #   revs, _ = data_preprocess("./twitter-sentiment-testset.csv", args['clean'], int(args['max_vocab']))
 #   test_data, _ = feature_extraction_bow(revs, word2idx)
 #   write_testset_prediction(parameters, test_data.T, args['file_name']+'.csv' )
+
