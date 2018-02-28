@@ -3,11 +3,12 @@ logistic_regression.py
 
 Model training
 '''
+import os.path as Path
 import re
 import time
-import os.path as Path
-import numpy as np
+
 import matplotlib.pyplot as plt
+import numpy as np
 from sklearn.model_selection import train_test_split
 
 from preprocess import DataManager
@@ -152,7 +153,7 @@ class Dense:
     # Update weight and bias
     bias_x, weight_x = np.split(x, [1], axis=0)
     self.weight -= weight_x
-    self.bias -= bias_x.T
+    self.bias -= bias_x
     # Propagation error to previous layer
     self.prev_layer._back_prop(dError_dOut_prev, learning_rate, momentum)
   def _save(self, h5_file, index):
@@ -163,7 +164,8 @@ class Dense:
       h5_file['%d_Dense_a'%(index)] = self.activation_fn_name
       h5_file['%d_Dense_o'%(index)] = self.output_unit
     else:
-      assert any([not x.startswith('%d_'%(index)) or x.startswith('%d_dense'%(index)) for x in h5_file.keys()])
+      assert any([not x.startswith('%d_'%(index)) or \
+                 x.startswith('%d_dense'%(index)) for x in h5_file.keys()])
       h5_file.create_dataset('%d_Dense_w'%(index), data=self.weight)
       h5_file.create_dataset('%d_Dense_b'%(index), data=self.bias)
       h5_file.create_dataset('%d_Dense_v'%(index), data=self.velocity)
@@ -186,19 +188,20 @@ class Model:
   """
   Manage model
   """
-  def __init__(self, learning_rate, momentum=0., data_file='./twitter-sentiment.csv',
+  def __init__(self, input_dim, learning_rate, momentum=0.,
                model_file=None, load_model=False):
     """
     Args:
+      input_dim:          Length of input vector
       learning_rate:      For update weight and bias
       momentum:           For update velocity [Recommend: .9]
     """
+    self.input_dim = input_dim
     self.learning_rate = learning_rate
     self.momentum = momentum
     self.model_file = model_file
     if not self.model_file.endswith('.h5'):
       self.model_file += '.h5'
-    self.data_manager = DataManager(data_file, do_cleaning=True)
     self.input_layer = None
     self.output_layer = None
     self.loss_fn = None
@@ -211,7 +214,7 @@ class Model:
     # Get functions for evaluating loss, gradient and accuarcy
     self.loss_fn, self.gradient_fn, self.accuracy_fn = Loss.cross_entropy()
     # Input layer
-    self.input_layer = Input(self.data_manager.input_vec_len)
+    self.input_layer = Input(self.input_dim)
     # Output layer:
     #   activation func:                      sigmoid
     #   Bias, weight random initialization:   True
@@ -232,7 +235,7 @@ class Model:
           new_layer = globals()[class_name]._load(h5f, last_index, last_layer)
           last_layer = new_layer
       self.output_layer = last_layer
-  def fit(self, batch_size=1, epoch=1, log_file='run.log', split_ratio=.2):
+  def fit(self, X, Y, batch_size=1, epoch=1, log_file='run.log', split_ratio=.2, plot=False):
     """
     Train the network for a fixed number of epochs
 
@@ -244,144 +247,176 @@ class Model:
       split_ratio:          Ratio of validation set to training set
       model_file:           File for saving model having the lowest validation loss
     """
-    # Get data and label
-    data, label = self.data_manager.extract_feature(True)
     # Split into training and validation sets
-    x_train, x_valid, y_train, y_valid = train_test_split(data, label,
+    x_train, x_valid, y_train, y_valid = train_test_split(X, Y,
                                                           test_size=split_ratio, random_state=0)
-    # Delete original variables for saving memory  
-    del data, label
+    # Delete original variables for saving memory
+    # del X, Y
 
     # Check whether the log file has correct file extension
     if not log_file.endswith('.log'):
       log_file += '.log'
 
+    if plot:
+      import matplotlib.pyplot as plt
+      from scipy.interpolate import spline
+      fig, (ax1, ax2) = plt.subplots(2, 1)
+      ax1.set_xlabel('epoch')
+      ax1.set_ylabel('value')
+      ax2.set_xlabel('epoch')
+      ax2.set_ylabel('value')
+
     # Main loop
     best_valid_loss = 999.
-    best_valid_acc = None
-    print('Start training...')
-    with open(log_file, 'w+') as log:
-      # Write header to log file
-      log.write('iteration, train acc, dev acc\n')
-      # For each epoch
-      for epoch_index in range(epoch):
-        sum_train_loss = 0.
-        train_correct_count = 0.
-        print('\r[ %d / %d ] epoch:'%(epoch_index + 1, epoch))
-        print('\r[%s] (%3.f%%) loss: %.4f'%('-'*20, 0., 0.), end='\033[K')
-        rand_ints = np.random.permutation(len(x_train))
-        total_train_size = len(rand_ints) // batch_size * batch_size
-        for iter_index in range(len(rand_ints) // batch_size):
-          # Shuffle data and label
-          data_batch = x_train[rand_ints[iter_index*batch_size:(iter_index+1)*batch_size]]
-          label_batch = y_train[rand_ints[iter_index*batch_size:(iter_index+1)*batch_size]]
-          # Feed forward
-          self.input_layer(data_batch)
-          # Calculate loss
-          sum_train_loss += self.loss_fn(label_batch, self.output_layer.output)
-          train_correct_count += self.accuracy_fn(label_batch,
-                                                  self.output_layer.output) * len(label_batch)
-          # Back propagation
-          gradient = self.gradient_fn(label_batch, self.output_layer.output)
-          self.output_layer._back_prop(gradient, self.learning_rate, self.momentum)
-          # Print loss and accuracy
-          progress = min((iter_index + 1) / (len(rand_ints) // batch_size) * 20., 20.)
-          print('\r[%s] (%3.f%%) loss: %.4f acc: %.3f'%
-                ('>'*int(progress)+'-'*(20-int(progress)), progress * 5.,
-                 sum_train_loss / (iter_index + 1),
-                 train_correct_count / ((iter_index+1) * batch_size)), end='\033[K')
-        # Calculate validation loss and accuracy
-        sum_valid_loss = 0.
-        valid_correct_count = 0.
-        total_valid_size = len(x_valid) // batch_size * batch_size
-        for iter_index in range(len(x_valid) // batch_size):
-          data_batch = x_valid[iter_index*batch_size:(iter_index+1)*batch_size]
-          label_batch = y_valid[iter_index*batch_size:(iter_index+1)*batch_size]
-          self.input_layer(data_batch)
-          sum_valid_loss += self.loss_fn(label_batch, self.output_layer.output)
-          valid_correct_count += self.accuracy_fn(label_batch,
-                                                  self.output_layer.output) * len(label_batch)
-        mean_valid_loss = sum_valid_loss / total_valid_size
-        mean_valid_acc = valid_correct_count / total_valid_size
-        print(' val_loss: %.4f val_acc: %.3f'%(mean_valid_loss, mean_valid_acc), end='')
-        log.write('%d,%.5f,%.5f\n'%(epoch_index, train_correct_count / total_train_size,
-                                    mean_valid_acc))
-        # Save best model
-        if mean_valid_loss < best_valid_loss and self.model_file is not None:
-          best_valid_loss = mean_valid_loss
-          self.save(self.model_file, best_valid_loss)
-          best_valid_acc = mean_valid_acc
-        print('\n')
+    best_valid_acc = 0.
+    train_loss_history, train_acc_history = [], []
+    valid_loss_history, valid_acc_history = [], []
+    try:
+      print('Start training...')
+      with open(log_file, 'w+') as log:
+        # Write header to log file
+        log.write('iteration, train acc, dev acc\n')
+        # For each epoch
+        for epoch_index in range(epoch):
+          sum_train_loss = 0.
+          train_correct_count = 0.
+          print('\r[ %d / %d ] epoch:'%(epoch_index + 1, epoch))
+          print('\r[%s] (%3.f%%) loss: %.4f'%('-'*20, 0., 0.), end='\033[K')
+          rand_ints = np.random.permutation(len(x_train))
+          total_train_size = len(rand_ints) // batch_size * batch_size
+          for iter_index in range(len(rand_ints) // batch_size):
+            # Shuffle data and label
+            data_batch = x_train[rand_ints[iter_index*batch_size:(iter_index+1)*batch_size]]
+            label_batch = y_train[rand_ints[iter_index*batch_size:(iter_index+1)*batch_size]]
+            # Feed forward
+            self.input_layer(data_batch)
+            # Calculate loss
+            sum_train_loss += self.loss_fn(label_batch, self.output_layer.output)
+            train_correct_count += self.accuracy_fn(label_batch,
+                                                    self.output_layer.output) * len(label_batch)
+            # Back propagation
+            gradient = self.gradient_fn(label_batch, self.output_layer.output)
+            self.output_layer._back_prop(gradient, self.learning_rate, self.momentum)
+            # Print loss and accuracy
+            progress = min((iter_index + 1) / (len(rand_ints) // batch_size) * 20., 20.)
+            print('\r[%s] (%3.f%%) loss: %.4f acc: %.3f'%
+                  ('>'*int(progress)+'-'*(20-int(progress)), progress * 5.,
+                   sum_train_loss / ((iter_index + 1) * batch_size),
+                   train_correct_count / ((iter_index+1) * batch_size)), end='\033[K')
+          train_loss_history.append(sum_train_loss / total_train_size)
+          mean_train_acc = train_correct_count / total_train_size
+          train_acc_history.append(mean_train_acc)
+          # Calculate validation loss and accuracy
+          sum_valid_loss = 0.
+          valid_correct_count = 0.
+          total_valid_size = len(x_valid) // batch_size * batch_size
+          for iter_index in range(len(x_valid) // batch_size):
+            data_batch = x_valid[iter_index*batch_size:(iter_index+1)*batch_size]
+            label_batch = y_valid[iter_index*batch_size:(iter_index+1)*batch_size]
+            self.input_layer(data_batch)
+            sum_valid_loss += self.loss_fn(label_batch, self.output_layer.output)
+            valid_correct_count += self.accuracy_fn(label_batch,
+                                                    self.output_layer.output) * len(label_batch)
+          mean_valid_loss = sum_valid_loss / total_valid_size
+          mean_valid_acc = valid_correct_count / total_valid_size
+          valid_loss_history.append(mean_valid_loss)
+          valid_acc_history.append(mean_valid_acc)
+          print(' val_loss: %.4f val_acc: %.3f'%(mean_valid_loss, mean_valid_acc), end='')
+          log.write('%d,%.5f,%.5f\n'%(epoch_index, mean_train_acc, mean_valid_acc))
+          # Save best model
+          # if mean_valid_loss < best_valid_loss and self.model_file is not None:
+          #   best_valid_loss = mean_valid_loss
+          #   self.save(self.model_file, best_valid_loss)
+          #   best_valid_acc = mean_valid_acc
+          if mean_valid_acc > best_valid_acc and self.model_file is not None:
+            best_valid_acc = mean_valid_acc
+            self.save(self.model_file, best_valid_acc)
+            best_valid_loss = mean_valid_loss
+          print('\n')
+          if plot and len(train_loss_history) > 3:
+            x_axis = np.arange(len(train_loss_history))
+            smooth_x = np.linspace(0, len(train_loss_history)-1)
+            smooth_train_loss_history = spline(x_axis, np.squeeze(train_loss_history), smooth_x)
+            smooth_train_acc_history = spline(x_axis, np.squeeze(train_acc_history), smooth_x)
+            smooth_valid_loss_history = spline(x_axis, np.squeeze(valid_loss_history), smooth_x)
+            smooth_valid_acc_history = spline(x_axis, np.squeeze(valid_acc_history), smooth_x)
+            ax1.clear()
+            ax2.clear()
+            ax1.plot(smooth_x, smooth_train_loss_history, 'm-',
+                     smooth_x, smooth_valid_loss_history, 'r-')
+            ax2.plot(smooth_x, smooth_train_acc_history, 'c-',
+                     smooth_x, smooth_valid_acc_history, 'b-')
+            ax1.legend(['train_loss', 'valid_loss'])
+            ax2.legend(['train_acc', 'valid_acc'])
+            fig.canvas.draw()
+            fig.show()
+    except KeyboardInterrupt:
+      print('Training interrupted...\n')
+      pass
     print('\nBest validation accuracy: %d\n'%(best_valid_acc))
+    if plot:
+      fig.savefig('result.png')
     print('Finish training!\n')
   def save(self, file_name, valid_loss):
     if not file_name.endswith('.h5'):
       file_name += '.h5'
     import h5py
     with h5py.File(file_name, 'w') as h5f:
-      if 'best_valid_loss' not in h5f.keys() or h5f['best_valid_loss'] > valid_loss:
+      # if 'best_valid_loss' not in h5f.keys() or h5f['best_valid_loss'] > valid_loss:
+      #   self.input_layer._save(h5f)
+      #   h5f['best_valid_loss'] = valid_loss
+      #   print(' -- saved', end='')
+      if 'best_valid_acc' not in h5f.keys() or h5f['best_valid_acc'] > valid_loss:
         self.input_layer._save(h5f)
-        h5f['best_valid_loss'] = valid_loss
+        h5f['best_valid_acc'] = valid_loss
         print(' -- saved', end='')
+  def predict(self, X):
+    num_batch = len(X) // 50
+    if len(X) - num_batch * 50 > 0:
+      num_batch += 1
+    results = []
+    for i in range(num_batch):
+      data_batch = X[i*50:(i+1)*50]
+      # Feed forward
+      self.input_layer(data_batch)
+      result = np.zeros_like(self.output_layer.output, dtype=np.int32)
+      result[self.output_layer.output >= .5] = 1
+      results.append(result)
+    return np.reshape(results, (-1))
 
 if __name__ == '__main__':
-  model = Model(.001, .9, model_file='model', load_model=False)
-  model.fit(batch_size=50, epoch=1)
-  # TOOD: Output prediction to file "myPrediction.csv"
+  import argparse
+  parser = argparse.ArgumentParser(description='Building Interactive Intelligent Systems')
+  parser.add_argument('-c', '--clean', help='True to do data cleaning, default is False',
+                      action='store_true')
+  parser.add_argument('-mv', '--max_vocab', help='max vocab size predifined, no limit if set -1',
+                      required=False, default=-1)
+  parser.add_argument('-lr', '--learning_rate', required=False, default=0.001)
+  parser.add_argument('-m', '--momentum', required=False, default=0.9)
+  parser.add_argument('-i', '--num_iter', required=False, default=10)
+  parser.add_argument('-fn', '--file_name', help='file name', required=False,
+                      default='myTest')
+  args = vars(parser.parse_args())
 
-# def write_testset_prediction(parameters, test_data, file_name="myPrediction.csv"):
-#   Y_prediction_test = predict(parameters['w'], parameters['b'], test_data)
-#   f_pred = open(file_name, 'w')
-#   f_pred.write('ID\tSentiment')
-#   ID = 1
-#   for pred in Y_prediction_test[0]:
-#     sentiment_pred = 'pos' if pred==1 else 'neg'
-#     f_pred.write(str(ID)+','+sentiment_pred+'\n')
-#     ID += 1
+  # Train network
+  data_manager = DataManager('./twitter-sentiment.csv', do_cleaning=args['clean'],
+                             max_vocab_size=args['max_vocab'])
+  model = Model(data_manager.input_vec_len, args['learning_rate'], args['momentum'],
+                model_file='model', load_model=False)
+  X, Y = data_manager.extract_feature(do_normailzation=True)
+  model.fit(X, Y, batch_size=50, epoch=args['num_iter'], plot=True)
+  del X, Y
 
-# def model(X_train, Y_train, X_dev, Y_dev, output_name, num_iterations=100, learning_rate=0.005):
-#   w, b = initialize_w_and_b(X_train.shape[0])
-
-#   parameters = optimize(w, b, X_train, Y_train, X_dev, Y_dev, num_iterations, learning_rate, output_name)
-
-#   Y_prediction_dev = predict(parameters["w"], parameters["b"], X_dev)
-#   print("Best dev accuracy: {} %".format(compare(Y_prediction_dev, Y_dev)))
-
-#   np.save(output_name+'.npy', parameters)
-
-#   return parameters
-
-# if __name__ == "__main__":
-#   import argparse
-#   parser = argparse.ArgumentParser(description='Building Interactive Intelligent Systems')
-#   parser.add_argument('-c','--clean', help='True to do data cleaning, default is False', action='store_true')
-#   parser.add_argument('-mv','--max_vocab', help='max vocab size predifined, no limit if set -1', required=False, default=-1)
-#   parser.add_argument('-lr','--learning_rate', required=False, default=0.1)
-#   parser.add_argument('-i','--num_iter', required=False, default=200)
-#   parser.add_argument('-fn','--file_name', help='file name', required=False, default='myTest')
-#   args = vars(parser.parse_args())
-#   print(args)
-
-#   print('[Read the data from twitter-sentiment.csv...]')
-#   revs, word2idx = data_preprocess('./twitter-sentiment.csv', args['clean'], int(args['max_vocab']))
-  
-#   print('[Extract features from the read data...]')
-#   data, label = feature_extraction_bow(revs, word2idx)
-#   data = normalization(data)
-  
-#   # shuffle data
-#   shuffle_idx = np.arange(len(data))
-#   np.random.shuffle(shuffle_idx)
-#   data = data[shuffle_idx]
-#   label = label[shuffle_idx]
-
-#   print('[Start training...]')
-#   X_train, X_dev, Y_train, Y_dev = train_test_split(data, label, test_size=0.2, random_state=0)
-#   parameters = model(X_train.T, Y_train.T, X_dev.T, Y_dev.T, args['file_name'], 
-#             num_iterations=int(args['num_iter']), learning_rate=float(args['learning_rate']))
-  
-#   print('\n[Start evaluating on the official test set and dump as {}...]'.format(args['file_name']+'.csv'))
-#   revs, _ = data_preprocess("./twitter-sentiment-testset.csv", args['clean'], int(args['max_vocab']))
-#   test_data, _ = feature_extraction_bow(revs, word2idx)
-#   write_testset_prediction(parameters, test_data.T, args['file_name']+'.csv' )
-
+  # Predict data
+  X, _ = data_manager.extract_feature(do_normailzation=True,
+                                      target_file_name='./twitter-sentiment-testset.csv')
+  prediction = model.predict(X)
+  if not args['file_name'].endswith('.csv'):
+    args['file_name'] += '.csv'
+  with open(args['file_name'], 'w+') as prediction_file:
+    prediction_file.write('ID\tsentiment\n')
+    bool_str = ['neg', 'pos']
+    lines = ['%d\t%s\n'%(index+1, bool_str[result]) for index, result in enumerate(prediction)]
+    prediction_file.writelines(lines)
+    print('\nAll finished!\n')
+  del X, data_manager
