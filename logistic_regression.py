@@ -3,6 +3,7 @@ logistic_regression.py
 
 Model training
 '''
+import os
 import os.path as Path
 import re
 import time
@@ -199,17 +200,20 @@ class Model:
     self.input_dim = input_dim
     self.learning_rate = learning_rate
     self.momentum = momentum
-    self.model_file = model_file
-    if not self.model_file.endswith('.h5'):
-      self.model_file += '.h5'
     self.input_layer = None
     self.output_layer = None
     self.loss_fn = None
     self.gradient_fn = None
-    if load_model and Path.exists(self.model_file):
-      self._load_model()
-    else:
-      self._build_model()
+    self.model_file = model_file
+    if self.model_file is not None:
+      if not self.model_file.endswith('.h5'):
+        self.model_file += '.h5'
+      if load_model and Path.exists(self.model_file):
+        print('\n\nModel loaded\n')
+        self._load_model()
+        return
+    self._build_model()
+    print('\n\nModel built\n')
   def _build_model(self):
     # Get functions for evaluating loss, gradient and accuarcy
     self.loss_fn, self.gradient_fn, self.accuracy_fn = Loss.cross_entropy()
@@ -324,14 +328,16 @@ class Model:
           print(' val_loss: %.4f val_acc: %.3f'%(mean_valid_loss, mean_valid_acc), end='')
           log.write('%d,%.5f,%.5f\n'%(epoch_index, mean_train_acc, mean_valid_acc))
           # Save best model
-          # if mean_valid_loss < best_valid_loss and self.model_file is not None:
+          # if mean_valid_loss < best_valid_loss:
           #   best_valid_loss = mean_valid_loss
-          #   self.save(self.model_file, best_valid_loss)
           #   best_valid_acc = mean_valid_acc
-          if mean_valid_acc > best_valid_acc and self.model_file is not None:
+          #   if self.model_file is not None:
+          #     self.save(self.model_file, best_valid_loss)
+          if mean_valid_acc > best_valid_acc:
             best_valid_acc = mean_valid_acc
-            self.save(self.model_file, best_valid_acc)
             best_valid_loss = mean_valid_loss
+            if self.model_file is not None:
+              self.save(self.model_file, best_valid_acc)
           print('\n')
           if plot and len(train_loss_history) > 3:
             x_axis = np.arange(len(train_loss_history))
@@ -388,28 +394,55 @@ if __name__ == '__main__':
   import argparse
   parser = argparse.ArgumentParser(description='Building Interactive Intelligent Systems')
   parser.add_argument('-c', '--clean', help='True to do data cleaning, default is False',
-                      action='store_true')
-  parser.add_argument('-mv', '--max_vocab', help='max vocab size predifined, no limit if set None',
+                      required=False, default=False, action='store_true')
+  parser.add_argument('-n', '--normalize', help='Normalize input vectors, default is False',
+                      required=False, default=True, action='store_true')
+  parser.add_argument('-p', '--plot', help='Plot results, default is False',
+                      required=False, default=False, action='store_true')
+  parser.add_argument('-mv', '--max_vocab', help='Max vocab size predifined, no limit if set None or <0',
                       required=False, default=None)
   parser.add_argument('-lr', '--learning_rate', required=False, default=0.001)
   parser.add_argument('-m', '--momentum', required=False, default=0.9)
   parser.add_argument('-i', '--num_iter', required=False, default=10)
-  parser.add_argument('-fn', '--file_name', help='file name', required=False,
-                      default='myTest')
+  parser.add_argument('-b', '--batch_size', help='Batch size, default is 50',
+                      required=False, default=50)
+  parser.add_argument('-dfn', '--data_file_name',
+                      help='Data file name, default is "twitter-sentiment"',
+                      required=False, default='twitter-sentiment')
+  parser.add_argument('-tfn', '--test_file_name',
+                      help='Test file name, default is "twitter-sentiment-testset"',
+                      required=False, default='twitter-sentiment-testset')
+  parser.add_argument('-fn', '--file_name', help='Output file name, default is "myTest"',
+                      required=False, default='myTest')
+  parser.add_argument('-mfn', '--model_file_name',
+                      help='Model file name, default is None',
+                      required=False, default=None)
+  parser.add_argument('-l', '--load', help='Load model file, default is False',
+                      required=False, default=False, action='store_true')
   args = vars(parser.parse_args())
 
   # Train network
-  data_manager = DataManager('./twitter-sentiment.csv', do_cleaning=args['clean'],
+  data_manager = DataManager(args['data_file_name'], do_cleaning=args['clean'],
                              max_vocab_size=args['max_vocab'])
-  model = Model(data_manager.input_vec_len, args['learning_rate'], args['momentum'],
-                model_file='model', load_model=False)
-  X, Y = data_manager.extract_feature(do_normailzation=True)
-  model.fit(X, Y, batch_size=50, epoch=args['num_iter'], plot=True)
-  del X, Y
+  if args['model_file_name'] is not None:
+    model = Model(data_manager.input_vec_len, args['learning_rate'], args['momentum'],
+                  model_file=args['model_file_name'], load_model=args['load'])
+  else:
+    model = Model(data_manager.input_vec_len, args['learning_rate'], args['momentum'],
+                  model_file='temp_model', load_model=False)
+  X, Y = data_manager.extract_feature(do_normailzation=args['normalize'])
+  model.fit(X, Y, batch_size=args['batch_size'], epoch=args['num_iter'], plot=args['plot'])
+  del X, Y, model
 
   # Predict data
-  X, _ = data_manager.extract_feature(do_normailzation=True,
-                                      target_file_name='./twitter-sentiment-testset.csv')
+  X, _ = data_manager.extract_feature(do_normailzation=args['normalize'],
+                                      target_file_name=args['test_file_name'])
+  if args['model_file_name'] is not None:
+    model = Model(data_manager.input_vec_len, args['learning_rate'], args['momentum'],
+                  model_file=args['model_file_name'], load_model=True)
+  else:
+    model = Model(data_manager.input_vec_len, args['learning_rate'], args['momentum'],
+                  model_file='temp_model', load_model=True)
   prediction = model.predict(X)
   if not args['file_name'].endswith('.csv'):
     args['file_name'] += '.csv'
@@ -419,4 +452,8 @@ if __name__ == '__main__':
     lines = ['%d\t%s\n'%(index+1, bool_str[result]) for index, result in enumerate(prediction)]
     prediction_file.writelines(lines)
     print('\nAll finished!\n')
+
+  # Clean up temp file
+  if args['model_file_name'] is None and Path.exists('temp_model.h5'):
+    os.remove('temp_model.h5')
   del X, data_manager
