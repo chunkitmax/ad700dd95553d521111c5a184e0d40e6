@@ -6,6 +6,7 @@ Data preprocessing
 import io
 import re
 from collections import Counter
+
 import numpy as np
 
 EPSILON = 1e-8
@@ -31,7 +32,6 @@ class DataManager:
     # Read data from file
     self.docs = []
     self.word_list = []
-
     self.docs, self.word_list, self.max_len, \
     self.word_count, self.doc_count = self._read_data(file_name)
 
@@ -52,7 +52,7 @@ class DataManager:
     print("Top 10 most frequently words", top_10_words)
 
     print('\nDataManager initialized!\n')
-  
+
   def _read_data(self, file_name):
     docs = []
     word_list = []
@@ -61,6 +61,8 @@ class DataManager:
     word_count = 0
     doc_count = 0
 
+    if not file_name.endswith('.csv'):
+      file_name += '.csv'
     with io.open(file_name, "r", encoding="ISO-8859-1") as f:
       next(f)
       for line_no, line in enumerate(f):
@@ -112,7 +114,8 @@ class DataManager:
     '''
     counter = Counter(self.word_list)
     words_len = len(counter.items())
-    if self.max_vocab_size is not None:
+    if self.max_vocab_size is not None and \
+       (not isinstance(self.max_vocab_size, int) or self.max_vocab_size >= 0):
       self.max_vocab_size = int(self.max_vocab_size)
       if self.max_vocab_size < words_len and self.max_vocab_size > 0:
         sorted_words = sorted(counter.items(), key=lambda x: x[1], reverse=True)
