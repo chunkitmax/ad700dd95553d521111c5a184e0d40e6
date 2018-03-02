@@ -6,6 +6,7 @@ Data preprocessing
 import io
 import re
 from collections import Counter
+from collections import deque
 
 import numpy as np
 
@@ -15,13 +16,12 @@ class DataManager:
   '''
   Manage data and convert it to bow vectors for the network
   '''
-  def __init__(self, file_name, do_cleaning=True, max_vocab_size=None, drop_vocab_max_ratio=0.1):
+  def __init__(self, file_name, do_cleaning=True, max_vocab_size=None, ngram=1):
     print('\rInitializing DataManager...', end='\033[K')
     # Settings
     self.do_cleaning = do_cleaning
     self.max_vocab_size = max_vocab_size
-      # Determine the ratio of most freq to least freq words
-    self.drop_vocab_max_ratio = drop_vocab_max_ratio
+    self.ngram = ngram
 
     # Stats
     self.max_len = 0        # Max document length
@@ -65,18 +65,23 @@ class DataManager:
       file_name += '.csv'
     with io.open(file_name, "r", encoding="ISO-8859-1") as f:
       next(f)
+      ngram_target = deque(maxlen=self.ngram)
       for line_no, line in enumerate(f):
         ID, label, sentence = line.split('\t', 2)
         label_idx = int(label == 'pos') # 1 for pos and 0 for neg
         sentence = sentence.strip()
 
         if self.do_cleaning:
-          orig_tweet = self._clean_str(sentence)
+          orig_tweet = self._clean_str(sentence.lower())
         else:
           orig_tweet = sentence.lower()
 
         docs.append({'y':label_idx, 'txt':orig_tweet})
-        word_list += orig_tweet.split()
+        ngram_target.clear()
+        for word in orig_tweet.split():
+          ngram_target.append(word)
+          if len(ngram_target) == self.ngram:
+            word_list.append(tuple(ngram_target))
         cur_sentence_len = len(orig_tweet.split())
         max_len = max(max_len, cur_sentence_len)
         word_count += cur_sentence_len
@@ -94,8 +99,15 @@ class DataManager:
       docs, _, _, _, doc_count = self._read_data(target_file_name)
     ret_data = np.zeros([doc_count, self.input_vec_len])
     ret_label = []
+    ngram_target = deque(maxlen=self.ngram)
     for doc_index, doc in enumerate(docs):
-      counter = Counter(doc['txt'].split())
+      ngram_target.clear()
+      ngram_list = []
+      for word in doc['txt'].split():
+        ngram_target.append(word)
+        if len(ngram_target) == self.ngram:
+          ngram_list.append(tuple(ngram_target))
+      counter = Counter(ngram_list)
       for word, count in dict(counter).items():
         if word not in self.word2idx.keys():
           word = '<UNK>'
@@ -113,18 +125,25 @@ class DataManager:
     Build word index dictionary
     '''
     counter = Counter(self.word_list)
-    words_len = len(counter.items())
+    tf_idf_dict = {key: np.array([0., 0.]) for key in dict(Counter(self.word_list)).keys()}
+    ngram_target = deque(maxlen=self.ngram)
+    for doc in self.docs:
+      ngram_list = []
+      ngram_target.clear()
+      for word in doc['txt'].split():
+        ngram_target.append(word)
+        if len(ngram_target) == self.ngram:
+          ngram_list.append(tuple(ngram_target))
+      ngram_counter = Counter(ngram_list)
+      for word, count in dict(ngram_counter).items():
+        tf_idf_dict[word] += [count, 1]
+    tf_idf_dict = {key: tf * np.log(self.doc_count / df) for key, (tf, df) in tf_idf_dict.items()}
+    tf_idf_list = sorted(tf_idf_dict.items(), key=lambda item: item[1], reverse=True)
     if self.max_vocab_size is not None and \
-       (not isinstance(self.max_vocab_size, int) or self.max_vocab_size >= 0):
+       (not isinstance(self.max_vocab_size, int) or int(self.max_vocab_size) >= 0):
       self.max_vocab_size = int(self.max_vocab_size)
-      if self.max_vocab_size < words_len and self.max_vocab_size > 0:
-        sorted_words = sorted(counter.items(), key=lambda x: x[1], reverse=True)
-        drop_count = words_len - self.max_vocab_size
-        drop_most_freq_word_count = int(drop_count * self.drop_vocab_max_ratio)
-        sorted_words = sorted_words[drop_most_freq_word_count:
-                                    -(drop_count - drop_most_freq_word_count + 1)]
-        counter = Counter(dict(sorted_words))
-    self.word2idx = {str(key): index+1 for index, key in enumerate(dict(counter).keys())}
+      tf_idf_list = tf_idf_list[-self.max_vocab_size:]
+    self.word2idx = {str(key): index+1 for index, key in enumerate(dict(tf_idf_list).keys())}
     self.word2idx['<UNK>'] = 0 # Unknown word
     top_10_words = [str(x) for x in dict(counter.most_common(10)).keys()]
     return top_10_words
@@ -140,6 +159,8 @@ class DataManager:
     ret_str = re.sub(r' ?URL ?', ' ', ret_str)
     # Remove punctuation
     ret_str = re.sub(r'[^a-zA-Z0-9\' ]', ' ', ret_str)
+    # Remove single quote
+    ret_str = re.sub(r'( \' ?)|( ?\' )', ' ', ret_str)
     # Remove more than one space
     ret_str = re.sub(r'\ +', ' ', ret_str)
     return ret_str.strip()
@@ -153,9 +174,11 @@ if __name__ == "__main__":
                       action='store_true')
   parser.add_argument('-mv', '--max_vocab', help='max vocab size predifined, no limit if set -1',
                       required=False, default=None)
+  parser.add_argument('-ng', '--ngram', help='ngram predifined, default is 1(=unigram)',
+                      required=False, default=1, type=int)
   args = vars(parser.parse_args())
 
-  manager = DataManager(args['file'], args['clean'], args['max_vocab'])
+  manager = DataManager(args['file'], args['clean'], args['max_vocab'], args['ngram'])
   data, label = manager.extract_feature(True)
   print('Data shape: ', np.shape(data), ', Label shape: ', np.shape(label))
   # print(manager._clean_str('@ lol//ahh..there is really no come back (pardon pun) to that '))

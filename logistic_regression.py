@@ -401,11 +401,13 @@ if __name__ == '__main__':
                       required=False, default=False, action='store_true')
   parser.add_argument('-mv', '--max_vocab', help='Max vocab size predifined, no limit if set None or <0',
                       required=False, default=None)
-  parser.add_argument('-lr', '--learning_rate', required=False, default=0.001)
-  parser.add_argument('-m', '--momentum', required=False, default=0.9)
-  parser.add_argument('-i', '--num_iter', required=False, default=10)
+  parser.add_argument('-ng', '--ngram', help='ngram predifined, default is 1(=unigram)',
+                      required=False, default=1, type=int)
+  parser.add_argument('-lr', '--learning_rate', required=False, default=0.001, type=float)
+  parser.add_argument('-m', '--momentum', required=False, default=0.9, type=float)
+  parser.add_argument('-i', '--num_iter', required=False, default=10, type=int)
   parser.add_argument('-b', '--batch_size', help='Batch size, default is 50',
-                      required=False, default=50)
+                      required=False, default=50, type=int)
   parser.add_argument('-dfn', '--data_file_name',
                       help='Data file name, default is "twitter-sentiment"',
                       required=False, default='twitter-sentiment')
@@ -423,7 +425,7 @@ if __name__ == '__main__':
 
   # Train network
   data_manager = DataManager(args['data_file_name'], do_cleaning=args['clean'],
-                             max_vocab_size=args['max_vocab'])
+                             max_vocab_size=args['max_vocab'], ngram=args['ngram'])
   if args['model_file_name'] is not None:
     model = Model(data_manager.input_vec_len, args['learning_rate'], args['momentum'],
                   model_file=args['model_file_name'], load_model=args['load'])
