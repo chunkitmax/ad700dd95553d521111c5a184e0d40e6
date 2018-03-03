@@ -352,6 +352,8 @@ class Model:
                      smooth_x, smooth_valid_loss_history, 'r-')
             ax2.plot(smooth_x, smooth_train_acc_history, 'c-',
                      smooth_x, smooth_valid_acc_history, 'b-')
+            ax1.set_ylim(ymin=0)
+            ax2.set_ylim(ymin=0)
             ax1.legend(['train_loss', 'valid_loss'])
             ax2.legend(['train_acc', 'valid_acc'])
             fig.canvas.draw()
