@@ -130,20 +130,21 @@ class DataManager:
     for doc in self.docs:
       ngram_list = []
       ngram_target.clear()
-      for word in doc['txt'].split():
+      words = doc['txt'].split()
+      for word in words:
         ngram_target.append(word)
         if len(ngram_target) == self.ngram:
           ngram_list.append(tuple(ngram_target))
       ngram_counter = Counter(ngram_list)
       for word, count in dict(ngram_counter).items():
         tf_idf_dict[word] += [count, 1]
-    tf_idf_dict = {key: tf * np.log(self.doc_count / df) for key, (tf, df) in tf_idf_dict.items()}
+    tf_idf_dict = {key: tf / len(tf_idf_dict.keys()) * np.log(self.doc_count / df) for key, (tf, df) in tf_idf_dict.items()}
     tf_idf_list = sorted(tf_idf_dict.items(), key=lambda item: item[1], reverse=True)
     if self.max_vocab_size is not None and \
        (not isinstance(self.max_vocab_size, int) or int(self.max_vocab_size) >= 0):
       self.max_vocab_size = int(self.max_vocab_size)
-      tf_idf_list = tf_idf_list[-self.max_vocab_size:]
-    self.word2idx = {str(key): index+1 for index, key in enumerate(dict(tf_idf_list).keys())}
+      tf_idf_list = tf_idf_list[:self.max_vocab_size]
+    self.word2idx = {key: index+1 for index, key in enumerate(dict(tf_idf_list).keys())}
     self.word2idx['<UNK>'] = 0 # Unknown word
     top_10_words = [str(x) for x in dict(counter.most_common(10)).keys()]
     return top_10_words
