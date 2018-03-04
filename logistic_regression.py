@@ -3,6 +3,7 @@ logistic_regression.py
 
 Model training
 '''
+import math
 import os
 import os.path as Path
 import re
@@ -50,10 +51,9 @@ class Loss:
       dE_dOut = -target / (add_epsilon(output)) + (1.-target) / add_epsilon(1.-output)
       return dE_dOut
     def accuracy(target, output):
-      _output = output.copy()
+      _output = np.zeros_like(output, dtype=np.float64)
       shape = np.shape(output)
-      _output[_output < .5] = 0.
-      _output[_output >= .5] = 1.
+      _output[output >= .5] = 1.
       correct = np.sum(np.equal(target, _output).astype(np.float64), axis=1)
       correct[correct != shape[1]] = 0.
       correct[correct == shape[1]] = 1.
@@ -189,7 +189,7 @@ class Model:
   """
   Manage model
   """
-  def __init__(self, input_dim, learning_rate, momentum=0.,
+  def __init__(self, input_dim, learning_rate, momentum=0., lr_decay=1.,
                model_file=None, load_model=False):
     """
     Args:
@@ -200,6 +200,7 @@ class Model:
     self.input_dim = input_dim
     self.learning_rate = learning_rate
     self.momentum = momentum
+    self.lr_decay = lr_decay
     self.input_layer = None
     self.output_layer = None
     self.loss_fn = None
@@ -239,7 +240,8 @@ class Model:
           new_layer = globals()[class_name]._load(h5f, last_index, last_layer)
           last_layer = new_layer
       self.output_layer = last_layer
-  def fit(self, X, Y, batch_size=1, epoch=1, log_file='run.log', split_ratio=.2, plot=False):
+  def fit(self, X, Y, batch_size=1, epoch=1, log_file='run.log', split_ratio=.2,
+          X_valid=None, Y_valid=None, plot=False):
     """
     Train the network for a fixed number of epochs
 
@@ -249,11 +251,18 @@ class Model:
       log_file:             Log file path [if the file exists, it'll overwrite.
                                            if not, it creates one]
       split_ratio:          Ratio of validation set to training set
+                              [if X_valid and Y_valid are not provided]
+      X_valid:              Data for validation
+      Y_valid:              Label for validation
       model_file:           File for saving model having the lowest validation loss
     """
     # Split into training and validation sets
-    x_train, x_valid, y_train, y_valid = train_test_split(X, Y,
-                                                          test_size=split_ratio, random_state=0)
+    assert ((X_valid is None) == (Y_valid is None))
+    if X_valid is None and Y_valid is None:
+      x_train, x_valid, y_train, y_valid = train_test_split(X, Y,
+                                                            test_size=split_ratio, random_state=0)
+    else:
+      x_train, x_valid, y_train, y_valid = X, X_valid, Y, Y_valid
     # Delete original variables for saving memory
     # del X, Y
 
@@ -287,8 +296,7 @@ class Model:
           print('\r[ %d / %d ] epoch:'%(epoch_index + 1, epoch))
           print('\r[%s] (%3.f%%) loss: %.4f'%('-'*20, 0., 0.), end='\033[K')
           rand_ints = np.random.permutation(len(x_train))
-          total_train_size = len(rand_ints) // batch_size * batch_size
-          for iter_index in range(len(rand_ints) // batch_size):
+          for iter_index in range(math.ceil(len(rand_ints) / batch_size)):
             # Shuffle data and label
             data_batch = x_train[rand_ints[iter_index*batch_size:(iter_index+1)*batch_size]]
             label_batch = y_train[rand_ints[iter_index*batch_size:(iter_index+1)*batch_size]]
@@ -302,27 +310,26 @@ class Model:
             gradient = self.gradient_fn(label_batch, self.output_layer.output)
             self.output_layer._back_prop(gradient, self.learning_rate, self.momentum)
             # Print loss and accuracy
-            progress = min((iter_index + 1) / (len(rand_ints) // batch_size) * 20., 20.)
+            progress = min((iter_index + 1) / math.ceil(len(rand_ints) / batch_size) * 20., 20.)
             print('\r[%s] (%3.f%%) loss: %.4f acc: %.3f'%
                   ('>'*int(progress)+'-'*(20-int(progress)), progress * 5.,
                    sum_train_loss / ((iter_index + 1) * batch_size),
                    train_correct_count / ((iter_index+1) * batch_size)), end='\033[K')
-          train_loss_history.append(sum_train_loss / total_train_size)
-          mean_train_acc = train_correct_count / total_train_size
+          train_loss_history.append(sum_train_loss / len(rand_ints))
+          mean_train_acc = train_correct_count / len(rand_ints)
           train_acc_history.append(mean_train_acc)
           # Calculate validation loss and accuracy
           sum_valid_loss = 0.
           valid_correct_count = 0.
-          total_valid_size = len(x_valid) // batch_size * batch_size
-          for iter_index in range(len(x_valid) // batch_size):
+          for iter_index in range(math.ceil(len(x_valid) / batch_size)):
             data_batch = x_valid[iter_index*batch_size:(iter_index+1)*batch_size]
             label_batch = y_valid[iter_index*batch_size:(iter_index+1)*batch_size]
             self.input_layer(data_batch)
             sum_valid_loss += self.loss_fn(label_batch, self.output_layer.output)
             valid_correct_count += self.accuracy_fn(label_batch,
                                                     self.output_layer.output) * len(label_batch)
-          mean_valid_loss = sum_valid_loss / total_valid_size
-          mean_valid_acc = valid_correct_count / total_valid_size
+          mean_valid_loss = sum_valid_loss / len(x_valid)
+          mean_valid_acc = valid_correct_count / len(x_valid)
           valid_loss_history.append(mean_valid_loss)
           valid_acc_history.append(mean_valid_acc)
           print(' val_loss: %.4f val_acc: %.3f'%(mean_valid_loss, mean_valid_acc), end='')
@@ -338,6 +345,7 @@ class Model:
             best_valid_loss = mean_valid_loss
             if self.model_file is not None:
               self.save(self.model_file, best_valid_acc)
+          self.learning_rate *= self.lr_decay
           print('\n')
           if plot and len(train_loss_history) > 3:
             x_axis = np.arange(len(train_loss_history))
@@ -353,7 +361,7 @@ class Model:
             ax2.plot(smooth_x, smooth_train_acc_history, 'c-',
                      smooth_x, smooth_valid_acc_history, 'b-')
             ax1.set_ylim(ymin=0)
-            ax2.set_ylim(ymin=0)
+            ax2.set_ylim(0., 1.)
             ax1.legend(['train_loss', 'valid_loss'])
             ax2.legend(['train_acc', 'valid_acc'])
             fig.canvas.draw()
@@ -378,12 +386,23 @@ class Model:
         self.input_layer._save(h5f)
         h5f['best_valid_acc'] = valid_loss
         print(' -- saved', end='')
+  def check(self, X, Y):
+    results = np.reshape(self.predict(X), (-1, 1))
+    # Calculate Accuracy
+    accuracy = np.mean(np.equal(results, Y).astype(np.float64))
+    # Get true positive count
+    true_positive = np.sum(results * Y)
+    # Calculate Precision
+    positive_count = np.sum(results)
+    precision = true_positive / positive_count
+    # Calculate Recall
+    true_count = np.sum(Y)
+    recall = true_positive / true_count
+    f1_score = 2. * ((precision * recall) / (precision + recall))
+    return accuracy, precision, recall, f1_score
   def predict(self, X):
-    num_batch = len(X) // 50
-    if len(X) - num_batch * 50 > 0:
-      num_batch += 1
     results = []
-    for i in range(num_batch):
+    for i in range(math.ceil(len(X) / 50)):
       data_batch = X[i*50:(i+1)*50]
       # Feed forward
       self.input_layer(data_batch)
@@ -391,6 +410,23 @@ class Model:
       result[self.output_layer.output >= .5] = 1
       results.append(result)
     return np.reshape(results, (-1))
+  def worst_doc(self, X, Y, top_k=5):
+    results = []
+    for i in range(math.ceil(len(X) / 50)):
+      data_batch = X[i*50:(i+1)*50]
+      self.input_layer(data_batch)
+      results.append(self.output_layer.output.copy())
+    results = np.reshape(results, (-1, 1))
+    keep_negative = results.copy()
+    keep_negative[keep_negative >= .5] = 1.
+    top_false_negative = sorted([[index, val] for index, val in enumerate([Y - keep_negative][0])],
+                                key=lambda x: x[1], reverse=True)[:top_k]
+    keep_positive = results.copy()
+    keep_positive[keep_positive < .5] = 0.
+    top_false_positive = sorted([[index, val] for index, val in enumerate([Y - keep_positive][0])],
+                                key=lambda x: x[1])[:top_k]
+    return [index for [index, val] in top_false_negative], \
+           [index for [index, val] in top_false_positive]
 
 if __name__ == '__main__':
   import argparse
@@ -401,12 +437,14 @@ if __name__ == '__main__':
                       required=False, default=True, action='store_true')
   parser.add_argument('-p', '--plot', help='Plot results, default is False',
                       required=False, default=False, action='store_true')
-  parser.add_argument('-mv', '--max_vocab', help='Max vocab size predifined, no limit if set None or <0',
+  parser.add_argument('-mv', '--max_vocab',
+                      help='Max vocab size predifined, no limit if set None or <0',
                       required=False, default=None)
   parser.add_argument('-ng', '--ngram', help='ngram predifined, default is 1(=unigram)',
                       required=False, default=1, type=int)
   parser.add_argument('-lr', '--learning_rate', required=False, default=0.001, type=float)
   parser.add_argument('-m', '--momentum', required=False, default=0.9, type=float)
+  parser.add_argument('-lrd', '--learning_rate_decay', required=False, default=1., type=float)
   parser.add_argument('-i', '--num_iter', required=False, default=10, type=int)
   parser.add_argument('-b', '--batch_size', help='Batch size, default is 50',
                       required=False, default=50, type=int)
@@ -430,24 +468,28 @@ if __name__ == '__main__':
                              max_vocab_size=args['max_vocab'], ngram=args['ngram'])
   if args['model_file_name'] is not None:
     model = Model(data_manager.input_vec_len, args['learning_rate'], args['momentum'],
-                  model_file=args['model_file_name'], load_model=args['load'])
+                  args['learning_rate_decay'], model_file=args['model_file_name'],
+                  load_model=args['load'])
   else:
     model = Model(data_manager.input_vec_len, args['learning_rate'], args['momentum'],
-                  model_file='temp_model', load_model=False)
+                  args['learning_rate_decay'], model_file='temp_model', load_model=False)
   X, Y = data_manager.extract_feature(do_normailzation=args['normalize'])
-  model.fit(X, Y, batch_size=args['batch_size'], epoch=args['num_iter'], plot=args['plot'])
-  del X, Y, model
+  x_train, x_valid, y_train, y_valid = train_test_split(X, Y,
+                                                        test_size=0.2, random_state=0)
+  del X, Y
+  model.fit(x_train, y_train, X_valid=x_valid, Y_valid=y_valid,
+            batch_size=args['batch_size'], epoch=args['num_iter'], plot=args['plot'])
 
   # Predict data
-  X, _ = data_manager.extract_feature(do_normailzation=args['normalize'],
-                                      target_file_name=args['test_file_name'])
+  test_X, _ = data_manager.extract_feature(do_normailzation=args['normalize'],
+                                           target_file_name=args['test_file_name'])
   if args['model_file_name'] is not None:
     model = Model(data_manager.input_vec_len, args['learning_rate'], args['momentum'],
-                  model_file=args['model_file_name'], load_model=True)
+                  args['learning_rate_decay'], model_file=args['model_file_name'], load_model=True)
   else:
     model = Model(data_manager.input_vec_len, args['learning_rate'], args['momentum'],
-                  model_file='temp_model', load_model=True)
-  prediction = model.predict(X)
+                  args['learning_rate_decay'], model_file='temp_model', load_model=True)
+  prediction = model.predict(test_X)
   if not args['file_name'].endswith('.csv'):
     args['file_name'] += '.csv'
   with open(args['file_name'], 'w+') as prediction_file:
@@ -457,7 +499,19 @@ if __name__ == '__main__':
     prediction_file.writelines(lines)
     print('\nAll finished!\n')
 
+  acc, prec, rec, fscr = model.check(x_valid, y_valid)
+  print('Best model: %3.1f%% Accuracy, %3.1f%% Precision, %3.1f%% Recall, F1 score %.3f\n'
+        %(acc * 100., prec * 100., rec * 100., fscr))
+
+  del x_train, y_train, x_valid, y_valid, test_X
+  X, Y = data_manager.extract_feature(do_normailzation=args['normalize'])
+  false_negative_indice, false_positive_indice = model.worst_doc(X, Y, 5)
+  print('False negative: \n'+
+        '\n'.join([data_manager.docs[index]['txt'] for index in false_negative_indice]))
+  print('\nFalse positive: \n'+
+        '\n'.join([data_manager.docs[index]['txt'] for index in false_positive_indice]))
+
   # Clean up temp file
   if args['model_file_name'] is None and Path.exists('temp_model.h5'):
     os.remove('temp_model.h5')
-  del X, data_manager
+  del X, Y, data_manager

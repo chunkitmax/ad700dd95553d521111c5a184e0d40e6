@@ -16,12 +16,14 @@ class DataManager:
   '''
   Manage data and convert it to bow vectors for the network
   '''
-  def __init__(self, file_name, do_cleaning=True, max_vocab_size=None, ngram=1):
+  def __init__(self, file_name, do_cleaning=True, max_vocab_size=None,
+               ngram=1, include_unigram=True):
     print('\rInitializing DataManager...', end='\033[K')
     # Settings
     self.do_cleaning = do_cleaning
     self.max_vocab_size = max_vocab_size
     self.ngram = ngram
+    self.include_unigram = include_unigram
 
     # Stats
     self.max_len = 0        # Max document length
@@ -82,6 +84,8 @@ class DataManager:
           ngram_target.append(word)
           if len(ngram_target) == self.ngram:
             word_list.append(tuple(ngram_target))
+          if self.ngram > 1 and self.include_unigram:
+            word_list.append(tuple([word]))
         cur_sentence_len = len(orig_tweet.split())
         max_len = max(max_len, cur_sentence_len)
         word_count += cur_sentence_len
@@ -107,6 +111,8 @@ class DataManager:
         ngram_target.append(word)
         if len(ngram_target) == self.ngram:
           ngram_list.append(tuple(ngram_target))
+        if self.ngram > 1 and self.include_unigram:
+          ngram_list.append(tuple([word]))
       counter = Counter(ngram_list)
       for word, count in dict(counter).items():
         if word not in self.word2idx.keys():
@@ -135,10 +141,13 @@ class DataManager:
         ngram_target.append(word)
         if len(ngram_target) == self.ngram:
           ngram_list.append(tuple(ngram_target))
+        if self.ngram > 1 and self.include_unigram:
+          ngram_list.append(tuple([word]))
       ngram_counter = Counter(ngram_list)
       for word, count in dict(ngram_counter).items():
         tf_idf_dict[word] += [count, 1]
-    tf_idf_dict = {key: tf / len(tf_idf_dict.keys()) * np.log(self.doc_count / df) for key, (tf, df) in tf_idf_dict.items()}
+    tf_idf_dict = {key: tf / len(tf_idf_dict.keys()) * np.log(self.doc_count / df)
+                   for key, (tf, df) in tf_idf_dict.items() if tf > 5.}
     tf_idf_list = sorted(tf_idf_dict.items(), key=lambda item: item[1], reverse=True)
     if self.max_vocab_size is not None and \
        (not isinstance(self.max_vocab_size, int) or int(self.max_vocab_size) >= 0):
@@ -146,7 +155,7 @@ class DataManager:
       tf_idf_list = tf_idf_list[:self.max_vocab_size]
     self.word2idx = {key: index+1 for index, key in enumerate(dict(tf_idf_list).keys())}
     self.word2idx['<UNK>'] = 0 # Unknown word
-    top_10_words = [str(x) for x in dict(counter.most_common(10)).keys()]
+    top_10_words = [x for x in dict(counter.most_common(10)).keys()]
     return top_10_words
 
   def _clean_str(self, string):
@@ -156,10 +165,12 @@ class DataManager:
     ret_str = string
     # Remove HTML entity
     ret_str = re.sub(r'&[a-zA-Z];', '', ret_str)
-    # Remove URL
-    ret_str = re.sub(r' ?URL ?', ' ', ret_str)
+    # # Remove URL
+    # ret_str = re.sub(r' ?URL ?', ' ', ret_str)
     # Remove punctuation
     ret_str = re.sub(r'[^a-zA-Z0-9\' ]', ' ', ret_str)
+    # Integrate numbers
+    ret_str = re.sub(r'[0-9]+', ' <num> ', ret_str)
     # Remove single quote
     ret_str = re.sub(r'( \' ?)|( ?\' )', ' ', ret_str)
     # Remove more than one space
