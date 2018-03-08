@@ -240,13 +240,14 @@ class Model:
           new_layer = globals()[class_name]._load(h5f, last_index, last_layer)
           last_layer = new_layer
       self.output_layer = last_layer
-  def fit(self, X, Y, batch_size=1, epoch=1, log_file='run.log', split_ratio=.2,
+  def fit(self, X, Y, batch_size=None, epoch=1, log_file='run.log', split_ratio=.2,
           X_valid=None, Y_valid=None, plot=False):
     """
     Train the network for a fixed number of epochs
 
     Args:
       batch_size:           Determine how many samples are used in a single iteration
+                            (None=Batch gradient decent)
       epoch:                Determine how many times the whole dataset is used for training
       log_file:             Log file path [if the file exists, it'll overwrite.
                                            if not, it creates one]
@@ -265,6 +266,12 @@ class Model:
       x_train, x_valid, y_train, y_valid = X, X_valid, Y, Y_valid
     # Delete original variables for saving memory
     # del X, Y
+
+    # Batch size
+    if batch_size is None:
+      batch_size = np.shape(x_train)[0]
+    else:
+      batch_size = int(batch_size)
 
     # Check whether the log file has correct file extension
     if not log_file.endswith('.log'):
@@ -446,8 +453,8 @@ if __name__ == '__main__':
   parser.add_argument('-m', '--momentum', required=False, default=0.9, type=float)
   parser.add_argument('-lrd', '--learning_rate_decay', required=False, default=1., type=float)
   parser.add_argument('-i', '--num_iter', required=False, default=10, type=int)
-  parser.add_argument('-b', '--batch_size', help='Batch size, default is 50',
-                      required=False, default=50, type=int)
+  parser.add_argument('-b', '--batch_size', help='Batch size, default is None (Batch gradient decent)',
+                      required=False, default=None)
   parser.add_argument('-dfn', '--data_file_name',
                       help='Data file name, default is "twitter-sentiment"',
                       required=False, default='twitter-sentiment')
